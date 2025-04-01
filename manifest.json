@@ -1,0 +1,20 @@
+{
+  "manifest_version": 3,
+  "name": "Tab Volume Booster (MV3 Offscreen)",
+  "version": "2.2", // Increment version
+  "description": "Control and boost audio volume per tab using Offscreen API.",
+  "permissions": [
+    "tabCapture",
+    "offscreen",
+    "storage",
+    "scripting",
+    "tabs",
+    "favicon" // <<< Add this permission
+  ],
+  "action": {
+    "default_popup": "popup.html"
+  },
+  "background": {
+    "service_worker": "background.js"
+  }
+}

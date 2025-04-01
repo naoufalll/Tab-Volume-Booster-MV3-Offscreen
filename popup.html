@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Tab Volume Booster</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="container">
+    <h1>Tab Volume</h1>
+    <div class="volume-control">
+      <input type="range" id="volumeSlider" min="0" max="600" value="100" step="1">
+      <span id="volumePercentage" class="volume-display">100%</span>
+    </div>
+    <div class="preset-buttons">
+        <button class="preset-button" data-volume="50">50%</button>
+        <button class="preset-button" data-volume="100">100%</button>
+        <button class="preset-button" data-volume="200">200%</button>
+        <button class="preset-button" data-volume="400">400%</button>
+        <button class="preset-button" data-volume="600">MAX</button>
+    </div>
+    <div id="status" class="status-message">Loading...</div>
+    <button id="resetButton">Reset Current Tab</button>
+
+    <hr class="separator">
+
+    <h2 class="list-heading">Boosted Tabs</h2>
+    <div id="activeTabsList" class="active-tabs-container">
+        <!-- Active tabs will be listed here by JS -->
+        <span class="no-active-tabs">Loading list...</span>
+    </div>
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>

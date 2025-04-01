@@ -1,0 +1,233 @@
+body {
+  font-family: sans-serif;
+  width: 280px; /* Slightly wider for the list */
+  padding: 15px;
+  background-color: #f7f7f7;
+  color: #333;
+}
+
+.container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+h1 {
+  font-size: 16px;
+  margin-top: 0;
+  margin-bottom: 10px; /* Reduced margin */
+  font-weight: 600;
+  color: #111;
+}
+
+.volume-control {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  margin-bottom: 10px; /* Reduced margin */
+}
+
+#volumeSlider {
+  flex-grow: 1;
+  margin: 0 10px 0 0;
+  cursor: pointer;
+  accent-color: #4CAF50;
+}
+
+.volume-display { /* Renamed from #volumePercentage for reuse */
+  font-weight: bold;
+  font-size: 14px;
+  min-width: 45px;
+  text-align: right;
+  color: #444;
+  background-color: #eee;
+  padding: 3px 6px;
+  border-radius: 4px;
+  border: 1px solid #ddd;
+  transition: background-color 0.2s ease-out; /* For visual feedback */
+}
+/* Style for visual feedback on success */
+.volume-display.success-feedback {
+  background-color: #c8e6c9; /* Light green */
+  border-color: #a5d6a7;
+}
+
+
+/* --- Preset Buttons --- */
+.preset-buttons {
+    display: flex;
+    justify-content: space-between;
+    width: 100%;
+    margin-bottom: 15px;
+}
+.preset-button {
+    padding: 4px 0; /* Padding top/bottom only */
+    flex-grow: 1; /* Distribute space */
+    margin: 0 2px; /* Small gap */
+    cursor: pointer;
+    background-color: #f0f0f0;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    color: #333;
+    font-size: 11px; /* Smaller font */
+    text-align: center;
+    transition: background-color 0.15s ease;
+}
+.preset-button:first-child { margin-left: 0; }
+.preset-button:last-child { margin-right: 0; }
+.preset-button:hover {
+    background-color: #e0e0e0;
+    border-color: #bbb;
+}
+.preset-button:disabled {
+  background-color: #f8f8f8;
+  border-color: #e0e0e0;
+  color: #aaa;
+  cursor: not-allowed;
+}
+
+/* --- Status Message --- */
+.status-message {
+  font-size: 12px;
+  color: #666;
+  height: 18px;
+  margin-bottom: 12px;
+  text-align: center;
+  width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.status-message.error { /* Style for errors */
+    color: #c62828; /* Red color for errors */
+    font-weight: 500;
+}
+
+
+/* --- Reset Button --- */
+#resetButton {
+  padding: 6px 12px;
+  cursor: pointer;
+  background-color: #e0e0e0;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  color: #333;
+  font-size: 13px;
+  transition: background-color 0.15s ease;
+  margin-bottom: 10px; /* Add margin below */
+}
+#resetButton:hover {
+  background-color: #d0d0d0;
+  border-color: #bbb;
+}
+#resetButton:disabled {
+  background-color: #f0f0f0;
+  border-color: #e0e0e0;
+  color: #aaa;
+  cursor: not-allowed;
+}
+
+/* Disabled state for slider */
+#volumeSlider:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+/* --- Separator --- */
+.separator {
+    border: none;
+    border-top: 1px solid #ddd;
+    width: 100%;
+    margin: 5px 0 10px 0; /* Adjust spacing */
+}
+
+/* --- Active Tabs List --- */
+.list-heading {
+    font-size: 14px;
+    font-weight: 600;
+    color: #111;
+    margin: 0 0 8px 0;
+    width: 100%;
+    text-align: left;
+}
+.active-tabs-container {
+    width: 100%;
+    max-height: 150px; /* Limit height and add scroll */
+    overflow-y: auto;
+    border: 1px solid #e0e0e0;
+    border-radius: 4px;
+    background-color: #fff;
+    padding: 5px;
+    font-size: 12px;
+}
+.active-tabs-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+}
+.active-tabs-list li {
+    display: flex;
+    align-items: center;
+    padding: 4px 2px;
+    border-bottom: 1px solid #eee;
+}
+.active-tabs-list li:last-child {
+    border-bottom: none;
+}
+.active-tab-favicon {
+    width: 16px;
+    height: 16px;
+    margin-right: 6px;
+    flex-shrink: 0;
+}
+.active-tab-title {
+    flex-grow: 1;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    margin-right: 8px;
+}
+.active-tab-volume {
+    font-weight: bold;
+    min-width: 35px; /* Space for '600%' */
+    text-align: right;
+    margin-right: 8px;
+    color: #555;
+}
+.active-tab-reset {
+    padding: 2px 5px;
+    font-size: 10px;
+    line-height: 1;
+    cursor: pointer;
+    background-color: #f1f1f1;
+    border: 1px solid #ccc;
+    border-radius: 3px;
+    color: #555;
+    flex-shrink: 0;
+}
+.active-tab-reset:hover {
+    background-color: #e0e0e0;
+    border-color: #bbb;
+}
+.no-active-tabs {
+    color: #888;
+    padding: 10px;
+    text-align: center;
+    display: block;
+}
+
+
+/* --- Slider Thumb Styles --- */
+input[type=range]::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none; width: 16px; height: 16px; background: #4CAF50; cursor: pointer; border-radius: 50%; border: none; margin-top: -6px;
+}
+input[type=range]::-moz-range-thumb {
+  width: 16px; height: 16px; background: #4CAF50; cursor: pointer; border-radius: 50%; border: none;
+}
+/* --- Slider Track Styles --- */
+input[type=range]::-webkit-slider-runnable-track {
+  width: 100%; height: 4px; cursor: pointer; background: #ccc; border-radius: 2px;
+}
+input[type=range]::-moz-range-track {
+  width: 100%; height: 4px; cursor: pointer; background: #ccc; border-radius: 2px;
+}
