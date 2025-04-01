@@ -1,4 +1,5 @@
-// --- popup.js (Refactored with Presets, List, Feedback, Errors) ---
+// --- popup.js (Refactored) ---
+console.log("[Popup] Initializing...");
 
 // --- DOM Elements ---
 const slider = document.getElementById('volumeSlider');
@@ -7,53 +8,46 @@ const statusDisplay = document.getElementById('status');
 const resetButton = document.getElementById('resetButton');
 const presetButtonContainer = document.querySelector('.preset-buttons');
 const activeTabsListContainer = document.getElementById('activeTabsList');
-
+const boostedTabsHeading = document.querySelector('.list-heading'); // Reference heading
 
 // --- Constants ---
 const MSG_TYPE_GET_VOLUME = 'GET_VOLUME';
 const MSG_TYPE_SET_VOLUME = 'SET_VOLUME';
-const MSG_TYPE_GET_ACTIVE_TABS = 'GET_ACTIVE_TABS'; // New
+const MSG_TYPE_GET_ACTIVE_TABS = 'GET_ACTIVE_TABS';
 const DEFAULT_VOLUME = 100;
+const MAX_VOLUME = 600; // Defined from slider max
 const SET_VOLUME_DEBOUNCE_MS = 150;
-const VISUAL_FEEDBACK_DURATION_MS = 750; // How long success feedback lasts
+const VISUAL_FEEDBACK_DURATION_MS = 750;
+const DEFAULT_FAVICON_PATH = 'icons/icon16.png'; // Path to your default icon
+
+// Logging Prefixes
+const LOG_PREFIX = '[Popup]';
 
 // --- State ---
 let currentTabId = null;
+let currentTabUrl = null; // Store URL for checks
 let debounceTimer;
-let isLoading = true; // Flag to prevent sending SET while initially loading
+let isLoading = true; // Flag to prevent interactions during load/init error
 let feedbackTimeout; // Timer for visual feedback
-
 
 // --- Non-Linear Slider Mapping ---
 const SliderMapping = {
-    // Adjust powerFactor to change the curve.
-    // > 1.0 : More slider range dedicated to lower volumes (e.g., 2.0 is good for 0-600%)
-    // = 1.0 : Linear mapping
-    // < 1.0 : More slider range dedicated to higher volumes
-    powerFactor: 0.5, // Makes slider movement more granular at higher volumes (since slider max >> 100)
-                    // A value like 2.0 would give more granularity below 100%
+    powerFactor: 0.5, // More granularity at higher volumes (0-1 less sensitive, 100-600 more sensitive)
+    maxRawValue: parseFloat(slider.max),
+    maxActualVolume: MAX_VOLUME,
 
-    maxRawValue: parseFloat(slider.max), // Get from slider attribute
-    maxActualVolume: parseFloat(slider.max), // Assuming max volume matches slider max
-
-    /** Maps slider's raw linear value to actual volume using a power curve. */
     mapRawToActual(rawValue) {
         if (rawValue <= 0) return 0;
-        const normalizedValue = rawValue / this.maxRawValue; // Normalize 0-1
-        // Inverse power mapping: raise to 1/powerFactor
-        // e.g. powerFactor = 0.5 => square the normalized value (more range at high end)
-        // e.g. powerFactor = 2.0 => square root the normalized value (more range at low end)
+        const normalizedValue = Math.min(1, rawValue / this.maxRawValue); // Clamp to 1 max
         const mappedNormalized = Math.pow(normalizedValue, 1 / this.powerFactor);
-        const actualVolume = mappedNormalized * this.maxActualVolume;
+        const actualVolume = Math.min(this.maxActualVolume, mappedNormalized * this.maxActualVolume);
         return Math.round(actualVolume);
     },
 
-    /** Maps actual volume back to the raw slider value. */
     mapActualToRaw(actualVolume) {
         if (actualVolume <= 0) return 0;
         const cappedVolume = Math.min(actualVolume, this.maxActualVolume);
-        const normalizedVolume = cappedVolume / this.maxActualVolume; // Normalize 0-1
-        // Forward power mapping: raise to powerFactor
+        const normalizedVolume = cappedVolume / this.maxActualVolume;
         const mappedNormalized = Math.pow(normalizedVolume, this.powerFactor);
         const rawValue = mappedNormalized * this.maxRawValue;
         return Math.round(rawValue);
@@ -63,125 +57,185 @@ const SliderMapping = {
 // --- Error Message Mapping ---
 function mapErrorMessage(originalError) {
     if (!originalError) return "An unknown error occurred.";
-    const lowerError = originalError.toLowerCase();
+    const lowerError = String(originalError).toLowerCase(); // Ensure it's a string
 
-    if (lowerError.includes("cannot capture tab audio") || lowerError.includes("is it audible?")) {
-        return "Tab audio not capturable (is it playing?)";
+    // Specific Background/Offscreen Errors
+    if (lowerError.includes("cannot capture tab audio") || lowerError.includes("is it audible?") || lowerError.includes("getmediastreamid failed") || lowerError.includes("timed out")) {
+        return "Cannot capture audio (is tab audible/playing?)";
     }
     if (lowerError.includes("operation busy") || lowerError.includes("in progress")) {
         return "Busy, please wait a moment.";
     }
-    if (lowerError.includes("internal audio processor error") || lowerError.includes("offscreen document failed")) {
-        return "Internal audio error.";
+    if (lowerError.includes("internal audio processor error") || lowerError.includes("offscreen document failed") || lowerError.includes("audio setup failed")) {
+        return "Internal audio processor error.";
     }
+    if (lowerError.includes("internal audio processor unavailable")) {
+        return "Audio processor unavailable. Try reloading.";
+    }
+     if (lowerError.includes("invalid stream id")) {
+         return "Internal error (Invalid Stream ID).";
+     }
+
+    // Popup / Tab Errors
     if (lowerError.includes("no active tab")) {
         return "No active tab found.";
     }
-    if (lowerError.includes("cannot control chrome pages") || lowerError.includes("cannot control this page type")) {
+    if (lowerError.includes("cannot control") && (lowerError.includes("chrome pages") || lowerError.includes("this page type") || lowerError.includes("url scheme"))) {
         return "Cannot control this type of page.";
     }
+
+    // Communication / Runtime Errors
      if (lowerError.includes("invalid request parameters")) {
         return "Invalid request sent.";
     }
-     if (lowerError.includes("runtime error") || lowerError.includes("native host has exited")) {
-        // This often means the background script crashed or was terminated
-        return "Extension context error. Try reloading.";
+    if (lowerError.includes("runtime error") || lowerError.includes("native host has exited") || lowerError.includes("receiving end does not exist") || lowerError.includes("could not establish connection")) {
+        // Often means the background script crashed, was terminated, or is starting up
+        return "Extension context error. Try again shortly or reload.";
+     }
+     if (lowerError.includes("invalid tabid")) {
+         return "Internal error (Invalid Tab ID)."
      }
 
-    // Default fallback for other errors
-    // Truncate long generic messages
-    return originalError.length > 50 ? originalError.substring(0, 47) + "..." : originalError;
+    // Default fallback - truncate long generic messages
+    const maxLength = 60;
+    const cleanMsg = String(originalError).replace(/^Error: /, ''); // Remove leading "Error: "
+    return cleanMsg.length > maxLength ? cleanMsg.substring(0, maxLength - 3) + "..." : cleanMsg;
 }
 
 
 // --- Initialization ---
 async function initializePopup() {
-    isLoading = true; // Set loading flag
-    statusDisplay.textContent = 'Loading...';
-    statusDisplay.classList.remove('error'); // Clear error class
-    disableControls(true); // Disable while loading
-    renderActiveTabsList(null); // Show loading state for list
+    console.log(`${LOG_PREFIX} Starting initialization...`);
+    setLoadingState(true, 'Loading...');
 
     try {
+        // 1. Get Active Tab Info
         const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
         if (!tabs || tabs.length === 0 || !tabs[0].id) {
             throw new Error("No active tab found.");
         }
-
         currentTabId = tabs[0].id;
-        const tabUrl = tabs[0].url;
+        currentTabUrl = tabs[0].url;
+        console.log(`${LOG_PREFIX} Active Tab ID: ${currentTabId}, URL: ${currentTabUrl}`);
 
-        // Check if the URL is controllable
-        if (!tabUrl || !/^(https?|file):/.test(tabUrl)) {
-            if (tabUrl && tabUrl.startsWith('chrome://')) {
-                throw new Error("Cannot control Chrome pages.");
-            } else {
-                throw new Error("Cannot control this page type.");
-            }
+        // 2. Check if URL is controllable
+        if (!currentTabUrl || !/^(https?|file):/.test(currentTabUrl)) {
+            const reason = (currentTabUrl && currentTabUrl.startsWith('chrome://'))
+                ? "Cannot control chrome pages."
+                : "Cannot control this page type.";
+            throw new Error(reason);
         }
 
-        // Get current volume for the active tab
+        // 3. Get Current Volume for Active Tab
+        console.log(`${LOG_PREFIX} Requesting initial volume for tab ${currentTabId}`);
         const volumeResponse = await chrome.runtime.sendMessage({ type: MSG_TYPE_GET_VOLUME, tabId: currentTabId });
 
+        // Check for runtime errors after the call
         if (chrome.runtime.lastError) {
             throw new Error(`Runtime error: ${chrome.runtime.lastError.message}`);
         }
+        if (volumeResponse?.error) {
+             throw new Error(`Error getting volume: ${volumeResponse.error}`);
+        }
         if (volumeResponse && typeof volumeResponse.volume === 'number') {
-            console.log(`[Popup] Received initial volume: ${volumeResponse.volume}%`);
+            console.log(`${LOG_PREFIX} Received initial volume: ${volumeResponse.volume}%`);
             updateUI(volumeResponse.volume);
-            statusDisplay.textContent = ''; // Clear loading message
+            setStatus('', false); // Clear loading message
         } else {
-            console.warn("[Popup] Invalid response received for GET_VOLUME:", volumeResponse);
-            updateUI(DEFAULT_VOLUME);
-            statusDisplay.textContent = 'Using default (100%).';
+            console.warn(`${LOG_PREFIX} Invalid response for GET_VOLUME:`, volumeResponse);
+            updateUI(DEFAULT_VOLUME); // Fallback to default UI
+            setStatus('Could not get current volume.', false); // Informative but not error state
         }
 
-        // Fetch and render the list of active tabs
-        await fetchAndRenderActiveTabs();
+        // 4. Fetch and Render Boosted Tabs List (happens concurrently with UI enable)
+        fetchAndRenderActiveTabs(); // Don't await here, let it run in background
 
-        disableControls(false); // Enable controls after successful load
+        // 5. Enable Controls
+        setLoadingState(false); // Success!
 
     } catch (error) {
-        console.error("[Popup] Initialization error:", error);
+        console.error(`${LOG_PREFIX} Initialization error:`, error);
         const friendlyError = mapErrorMessage(error.message);
-        statusDisplay.textContent = `Error: ${friendlyError}`;
-        statusDisplay.classList.add('error');
+        setStatus(`Error: ${friendlyError}`, true);
         updateUI(DEFAULT_VOLUME); // Show default state
-        disableControls(true); // Keep controls disabled on error
-        renderActiveTabsList([]); // Show empty list on error
-    } finally {
-        isLoading = false; // Clear loading flag
+        setLoadingState(true); // Keep controls disabled on init error
+        renderActiveTabsList([], `Failed: ${friendlyError}`); // Show error in list too
     }
 }
 
-// --- Fetch and Render Active Tabs ---
+// --- UI State Management ---
+
+/** Sets the loading state for the main controls and status message. */
+function setLoadingState(loading, message = '') {
+    isLoading = loading;
+    slider.disabled = loading;
+    resetButton.disabled = loading;
+    presetButtonContainer.querySelectorAll('button').forEach(button => button.disabled = loading);
+
+    if (loading) {
+        setStatus(message, false); // Show loading message, not as error
+    }
+    // Keep existing status message if finishing loading (isLoading = false)
+}
+
+/** Sets the status message text and optional error styling. */
+function setStatus(message, isError = false) {
+     statusDisplay.textContent = message || ''; // Use empty string if message is null/undefined/empty
+     statusDisplay.classList.toggle('error', isError && !!message); // Add error class only if it's an error *and* there's a message
+}
+
+/** Updates the main slider/percentage display based on an ACTUAL volume value. */
+function updateUI(actualVolume) {
+    const clampedVolume = Math.max(0, Math.min(MAX_VOLUME, actualVolume)); // Ensure within 0-MAX bounds
+    const rawValue = SliderMapping.mapActualToRaw(clampedVolume);
+    slider.value = rawValue;
+    percentageDisplay.textContent = `${clampedVolume}%`;
+}
+
+/** Shows temporary visual feedback on the percentage display. */
+function showVisualFeedback() {
+    clearTimeout(feedbackTimeout);
+    percentageDisplay.classList.add('success-feedback');
+    feedbackTimeout = setTimeout(() => {
+        percentageDisplay.classList.remove('success-feedback');
+    }, VISUAL_FEEDBACK_DURATION_MS);
+}
+
+// --- Fetch and Render Active Tabs List ---
+
 async function fetchAndRenderActiveTabs() {
+    console.log(`${LOG_PREFIX} Fetching active tabs list...`);
+    renderActiveTabsList(null); // Show loading state in list
+
     try {
         const response = await chrome.runtime.sendMessage({ type: MSG_TYPE_GET_ACTIVE_TABS });
         if (chrome.runtime.lastError) {
              throw new Error(`Runtime error fetching list: ${chrome.runtime.lastError.message}`);
         }
+        if (response?.error) {
+            throw new Error(`Error fetching list: ${response.error}`);
+        }
         if (response && Array.isArray(response.activeTabs)) {
+            console.log(`${LOG_PREFIX} Received ${response.activeTabs.length} active tabs.`);
             renderActiveTabsList(response.activeTabs);
         } else {
              throw new Error("Invalid response when fetching active tabs.");
         }
     } catch (error) {
-         console.error("[Popup] Error fetching or rendering active tabs:", error);
-         renderActiveTabsList(null, mapErrorMessage(error.message)); // Show error in the list area
+         console.error(`${LOG_PREFIX} Error fetching or rendering active tabs:`, error);
+         renderActiveTabsList([], mapErrorMessage(error.message)); // Show error in the list area
     }
 }
 
-
-// --- Render Active Tabs List ---
 function renderActiveTabsList(tabsData, errorMessage = null) {
     activeTabsListContainer.innerHTML = ''; // Clear previous content
 
     if (errorMessage) {
         const errorElement = document.createElement('span');
-        errorElement.className = 'no-active-tabs error'; // Use error class
-        errorElement.textContent = `Error loading list: ${errorMessage}`;
+        errorElement.className = 'no-active-tabs error'; // Use existing class + error style
+        errorElement.textContent = `List error: ${errorMessage}`;
         activeTabsListContainer.appendChild(errorElement);
+        boostedTabsHeading.style.display = 'block'; // Ensure heading is visible
         return;
     }
 
@@ -190,49 +244,60 @@ function renderActiveTabsList(tabsData, errorMessage = null) {
         loadingElement.className = 'no-active-tabs';
         loadingElement.textContent = `Loading list...`;
         activeTabsListContainer.appendChild(loadingElement);
+        boostedTabsHeading.style.display = 'block'; // Ensure heading is visible
         return;
     }
 
+    // Filter out the current tab from the list
+    const otherBoostedTabs = tabsData.filter(tab => tab.tabId !== currentTabId);
 
-    if (!tabsData || tabsData.length === 0) {
+    if (otherBoostedTabs.length === 0) {
         const noTabsElement = document.createElement('span');
         noTabsElement.className = 'no-active-tabs';
-        noTabsElement.textContent = 'No other tabs are boosted.';
+        noTabsElement.textContent = 'No other tabs currently boosted.';
         activeTabsListContainer.appendChild(noTabsElement);
+        boostedTabsHeading.style.display = 'block'; // Show heading even if list is empty now
         return;
     }
+
+    boostedTabsHeading.style.display = 'block'; // Make sure heading is visible
 
     const ul = document.createElement('ul');
     ul.className = 'active-tabs-list';
 
-    tabsData.sort((a, b) => (a.title || "").localeCompare(b.title || "")); // Sort alphabetically by title
+    // Sort alphabetically by title for consistent order
+    otherBoostedTabs.sort((a, b) => (a.title || "").localeCompare(b.title || ""));
 
-    tabsData.forEach(tab => {
+    otherBoostedTabs.forEach(tab => {
         const li = document.createElement('li');
+        li.dataset.tabId = tab.tabId; // Add tabId to li for potential future use
 
         const img = document.createElement('img');
         img.className = 'active-tab-favicon';
-        img.src = tab.favIconUrl || 'icons/icon16.png'; // Provide a default icon path
+        img.src = tab.favIconUrl || DEFAULT_FAVICON_PATH; // Use default if null/empty
         img.alt = ''; // Decorative
+        // Handle favicon loading error (optional, sets to default)
+        img.onerror = () => { if (img.src !== DEFAULT_FAVICON_PATH) img.src = DEFAULT_FAVICON_PATH; };
 
         const titleSpan = document.createElement('span');
         titleSpan.className = 'active-tab-title';
         titleSpan.textContent = tab.title || `Tab ID: ${tab.tabId}`;
-        titleSpan.title = tab.title || `Tab ID: ${tab.tabId}`; // Tooltip for long titles
+        titleSpan.title = tab.title || `Tab ID: ${tab.tabId}`; // Tooltip for overflow
 
         const volumeSpan = document.createElement('span');
         volumeSpan.className = 'active-tab-volume';
         volumeSpan.textContent = `${tab.volume}%`;
 
-        const resetButton = document.createElement('button');
-        resetButton.className = 'active-tab-reset';
-        resetButton.textContent = 'Reset';
-        resetButton.dataset.tabid = tab.tabId; // Store tabId for the click handler
+        const listResetButton = document.createElement('button');
+        listResetButton.className = 'active-tab-reset';
+        listResetButton.textContent = 'Reset';
+        listResetButton.dataset.tabid = tab.tabId; // Store tabId for the click handler
+        listResetButton.disabled = isLoading; // Disable if main controls are disabled
 
         li.appendChild(img);
         li.appendChild(titleSpan);
         li.appendChild(volumeSpan);
-        li.appendChild(resetButton);
+        li.appendChild(listResetButton);
         ul.appendChild(li);
     });
 
@@ -241,150 +306,133 @@ function renderActiveTabsList(tabsData, errorMessage = null) {
 
 
 // --- Event Listeners ---
+
+// Slider Input: Update display and debounce sending update
 slider.addEventListener('input', () => {
     if (isLoading) return;
 
     const rawValue = parseInt(slider.value, 10);
     const actualVolume = SliderMapping.mapRawToActual(rawValue);
 
+    // Update only the percentage display immediately
     percentageDisplay.textContent = `${actualVolume}%`;
-    statusDisplay.textContent = "";
-    statusDisplay.classList.remove('error'); // Clear error state
+    setStatus(""); // Clear status/error when user interacts
 
     clearTimeout(debounceTimer);
     debounceTimer = setTimeout(() => {
-        sendVolumeUpdate(actualVolume, currentTabId); // Send for current tab
+        // Send the *actual* calculated volume, not the raw slider value
+        handleVolumeChangeRequest(actualVolume, currentTabId);
     }, SET_VOLUME_DEBOUNCE_MS);
 });
 
-resetButton.addEventListener('click', () => { // Resets the CURRENT tab
-    if (isLoading || slider.disabled) return;
-    console.log("[Popup] Resetting current tab volume to 100%");
+// Reset Button for Current Tab
+resetButton.addEventListener('click', () => {
+    if (isLoading) return;
+    console.log(`${LOG_PREFIX} Resetting current tab (${currentTabId}) volume to 100%`);
     handleVolumeChangeRequest(DEFAULT_VOLUME, currentTabId);
 });
 
-// Listener for Preset Buttons (using event delegation)
+// Preset Buttons (Event Delegation)
 presetButtonContainer.addEventListener('click', (event) => {
-    if (isLoading || slider.disabled) return;
-    if (event.target.classList.contains('preset-button')) {
-        const volume = parseInt(event.target.dataset.volume, 10);
-        if (!isNaN(volume)) {
-             console.log(`[Popup] Preset button clicked: ${volume}%`);
-             handleVolumeChangeRequest(volume, currentTabId);
-        }
+    if (isLoading || !event.target.classList.contains('preset-button')) return;
+
+    const button = event.target;
+    const volume = parseInt(button.dataset.volume, 10);
+    if (!isNaN(volume)) {
+         console.log(`${LOG_PREFIX} Preset button clicked: ${volume}% for tab ${currentTabId}`);
+         button.disabled = true; // Briefly disable clicked button
+         handleVolumeChangeRequest(volume, currentTabId);
+         // Re-enable button after a short delay or on completion? Let sendVolumeUpdate handle state.
+         setTimeout(() => { if (!isLoading) button.disabled = false; }, 500); // Re-enable after delay
     }
 });
 
-// Listener for Reset buttons within the Active Tabs list (using event delegation)
+// Reset Buttons in Active Tabs List (Event Delegation)
 activeTabsListContainer.addEventListener('click', (event) => {
-     if (isLoading) return;
-     if (event.target.classList.contains('active-tab-reset')) {
-        const tabIdToReset = parseInt(event.target.dataset.tabid, 10);
-        if (!isNaN(tabIdToReset)) {
-            console.log(`[Popup] Resetting volume for tab ${tabIdToReset} from list`);
-            // Visually disable the button temporarily?
-            event.target.disabled = true;
-            event.target.textContent = '...';
-            handleVolumeChangeRequest(DEFAULT_VOLUME, tabIdToReset);
-            // Note: The list will refresh automatically on success via sendVolumeUpdate's callback
-        }
+     if (isLoading || !event.target.classList.contains('active-tab-reset')) return;
+
+     const button = event.target;
+     const tabIdToReset = parseInt(button.dataset.tabid, 10);
+     if (!isNaN(tabIdToReset)) {
+         console.log(`${LOG_PREFIX} Resetting volume for tab ${tabIdToReset} from list`);
+         button.disabled = true; // Disable button being clicked
+         button.textContent = '...'; // Provide visual feedback
+         // The list will refresh via sendVolumeUpdate callback, removing/updating this item
+         handleVolumeChangeRequest(DEFAULT_VOLUME, tabIdToReset);
      }
 });
 
 
-// --- Helper for handling volume changes from UI interactions ---
+// --- Core Logic ---
+
+/** Central handler for initiating volume changes from the UI. */
 function handleVolumeChangeRequest(actualVolume, targetTabId) {
+    if (isLoading) {
+        console.warn(`${LOG_PREFIX} Ignoring volume change request while loading.`);
+        return;
+    }
     if (targetTabId === null) {
-        console.error("[Popup] Cannot set volume, targetTabId is null.");
-        statusDisplay.textContent = mapErrorMessage("No active tab found.");
-        statusDisplay.classList.add('error');
+        console.error(`${LOG_PREFIX} Cannot set volume, targetTabId is null.`);
+        setStatus(mapErrorMessage("No active tab found."), true);
         return;
     }
 
-     // Update main UI only if the change is for the currently active tab
+     // Clamp volume just in case
+     const clampedVolume = Math.max(0, Math.min(MAX_VOLUME, actualVolume));
+
+     // Update main UI immediately ONLY if the change is for the currently viewed tab
      if (targetTabId === currentTabId) {
-         updateUI(actualVolume);
+         updateUI(clampedVolume);
      }
 
-     statusDisplay.textContent = ""; // Clear status
-     statusDisplay.classList.remove('error');
+     setStatus("Setting...", false); // Indicate activity
 
-     clearTimeout(debounceTimer); // Clear slider debounce if a button is clicked
-     sendVolumeUpdate(actualVolume, targetTabId);
+     clearTimeout(debounceTimer); // Clear slider debounce if button/reset triggered change
+     sendVolumeUpdate(clampedVolume, targetTabId);
 }
 
-
-// --- Communication with Background ---
-// Modified to accept targetTabId and update list on success
+/** Sends the volume update message to the background script. */
 function sendVolumeUpdate(actualVolume, targetTabId) {
-    if (targetTabId === null) {
-        console.error("[Popup] Cannot set volume, targetTabId is null.");
-        statusDisplay.textContent = mapErrorMessage("Tab ID missing.");
-        statusDisplay.classList.add('error');
-        return;
-    }
-
-    console.log(`[Popup] Sending SET_VOLUME: Tab ${targetTabId}, Volume ${actualVolume}%`);
-    // Only show "Setting..." if it's for the current tab? Or always? Let's show always for now.
-    statusDisplay.textContent = "Setting...";
-    statusDisplay.classList.remove('error');
-
+    console.log(`${LOG_PREFIX} Sending SET_VOLUME: Tab ${targetTabId}, Volume ${actualVolume}%`);
 
     chrome.runtime.sendMessage({ type: MSG_TYPE_SET_VOLUME, tabId: targetTabId, volume: actualVolume }, (response) => {
-        if (isLoading) return; // Ignore responses if popup re-initialized
+        // If popup closed or re-initialized while waiting, response might be irrelevant
+        if (isLoading && currentTabId === null) { // Check if popup state was reset
+             console.log(`${LOG_PREFIX} Ignoring SET_VOLUME response as popup seems closed/reset.`);
+             return;
+         }
 
-        // Always try to refresh the list, even on error, as state might have changed partially
+        // ALWAYS try to refresh the list after ANY set attempt, success or fail,
+        // as the background state might have changed partially or needs re-syncing.
         fetchAndRenderActiveTabs();
 
         if (chrome.runtime.lastError) {
-            console.error(`[Popup] Error setting volume for tab ${targetTabId} (runtime):`, chrome.runtime.lastError.message);
+            console.error(`${LOG_PREFIX} Error setting volume for tab ${targetTabId} (runtime):`, chrome.runtime.lastError);
             const friendlyError = mapErrorMessage(chrome.runtime.lastError.message);
-            statusDisplay.textContent = `Error: ${friendlyError}`;
-            statusDisplay.classList.add('error');
+            setStatus(`Error: ${friendlyError}`, true);
+            // Re-enable controls even on error, allowing user to retry
+            setLoadingState(false);
         } else if (response && response.status === "success") {
-            console.log(`[Popup] Volume set successfully for tab ${targetTabId}`);
-            statusDisplay.textContent = ""; // Clear "Setting..."
-            // Apply visual feedback only if the update was for the currently displayed tab
+            console.log(`${LOG_PREFIX} Volume set successfully for tab ${targetTabId}. Message: ${response.message || '(No message)'}`);
+            setStatus("", false); // Clear "Setting..."
+            // Apply visual feedback ONLY if the update was for the currently displayed tab
             if (targetTabId === currentTabId) {
                 showVisualFeedback();
+                 // Ensure UI matches the confirmed volume (in case of clamping/rounding differences)
+                 updateUI(actualVolume);
             }
+             setLoadingState(false); // Re-enable controls on success
         } else {
-            // Handle specific errors like "busy" or other failures from background
-            console.error(`[Popup] Error setting volume for tab ${targetTabId} (response):`, response?.error || "Unknown background error");
+            // Handle specific errors from background response
+            console.error(`${LOG_PREFIX} Error setting volume for tab ${targetTabId} (response):`, response?.error || "Unknown background error");
             const friendlyError = mapErrorMessage(response?.error);
-            statusDisplay.textContent = `Error: ${friendlyError}`;
-            statusDisplay.classList.add('error');
+            setStatus(`Error: ${friendlyError}`, true);
+             // If the error was 'busy', maybe keep controls disabled briefly?
+             // For now, re-enable to allow retry.
+             setLoadingState(false);
         }
     });
 }
 
-
-// --- UI Helper Functions ---
-
-/** Updates the main slider/percentage display based on an ACTUAL volume value. */
-function updateUI(actualVolume) {
-    const rawValue = SliderMapping.mapActualToRaw(actualVolume);
-    slider.value = rawValue;
-    percentageDisplay.textContent = `${actualVolume}%`;
-}
-
-/** Enables or disables the main controls. */
-function disableControls(disabled) {
-    slider.disabled = disabled;
-    resetButton.disabled = disabled;
-    // Also disable preset buttons
-    presetButtonContainer.querySelectorAll('button').forEach(button => button.disabled = disabled);
-    // We don't disable list reset buttons here, they depend on the list rendering
-}
-
-/** Shows temporary visual feedback on the percentage display. */
-function showVisualFeedback() {
-    clearTimeout(feedbackTimeout); // Clear previous timeout if any
-    percentageDisplay.classList.add('success-feedback');
-    feedbackTimeout = setTimeout(() => {
-        percentageDisplay.classList.remove('success-feedback');
-    }, VISUAL_FEEDBACK_DURATION_MS);
-}
-
 // --- Start Initialization ---
-initializePopup();
+document.addEventListener('DOMContentLoaded', initializePopup);
